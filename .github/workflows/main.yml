@@ -2,7 +2,7 @@ name: Nuclei YWH Scan
 
 on:
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '0 7 * * *'
   workflow_dispatch: # Allows manual trigger
 
 jobs:
@@ -28,17 +28,7 @@ jobs:
 
       - name: Nuclei Scan
         run: |
-          nuclei -l alive_targets.txt -severity medium,high,critical -stats -o nuclei_results.log
-        # Note: Added severity filter to reduce noise.
-
-      - name: Slack/Discord Notification
-        if: always()
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: |
-          if [ -s nuclei_results.log ]; then
-            curl -H "Content-Type: application/json" -X POST -d "{\"content\": \"🚨 Nuclei found vulnerabilities! Check artifacts.\"}" $DISCORD_WEBHOOK
-          fi
+          nuclei -l alive_targets.txt -severity low,medium,high,critical -stats -o nuclei_results.log
 
       - name: Send Telegram Notification
         if: always()
@@ -52,7 +42,6 @@ jobs:
             curl -v -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" -F "document=@nuclei_results.log" \
                  "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
           fi
-
 
       - name: Upload Results
         uses: actions/upload-artifact@v4

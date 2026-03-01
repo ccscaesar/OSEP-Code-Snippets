@@ -3,7 +3,7 @@ name: Nuclei YWH Scan
 on:
   schedule:
     - cron: '0 7 * * *'
-  workflow_dispatch: # Allows manual trigger
+  workflow_dispatch: 
 
 jobs:
   nuclei-scan:
@@ -11,6 +11,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # 1. New step to generate the date
+      - name: Set current date
+        run: echo "SCAN_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
       - name: Setup Go
         uses: actions/setup-go@v4
@@ -26,25 +30,30 @@ jobs:
         run: |
           curl -s https://raw.githubusercontent.com/rix4uni/scope/main/data/Yeswehack/yeswehack_inscope.txt | httpx -silent -fc 404 -o alive_targets.txt
 
+      # 2. Updated output filename with date and .txt extension
       - name: Nuclei Scan
         run: |
-          nuclei -l alive_targets.txt -severity low,medium,high,critical -stats -o nuclei_results.log
+          nuclei -l alive_targets.txt -severity low,medium,high,critical -stats -o nuclei_results_${{ env.SCAN_DATE }}.txt
 
+      # 3. Updated Telegram step to reference the new filename
       - name: Send Telegram Notification
         if: always()
         run: |
-          if [ -s nuclei_results.log ]; then
-            MESSAGE="🚨 *Nuclei Found Bugs!* 🚨%0A$(grep -c "\[" nuclei_results.log) vulnerabilities detected."
+          FILENAME="nuclei_results_${{ env.SCAN_DATE }}.txt"
+          if [ -s "$FILENAME" ]; then
+            COUNT=$(grep -c "\[" "$FILENAME")
+            MESSAGE="🚨 *Nuclei Found Bugs!* 🚨%0A$COUNT vulnerabilities detected."
+            
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
                  -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE&parse_mode=Markdown"
             
-            # Optionally send the log file as a document
-            curl -v -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" -F "document=@nuclei_results.log" \
+            curl -v -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" -F "document=@$FILENAME" \
                  "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
           fi
 
+      # 4. Updated Artifact step
       - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
-          name: nuclei-results
-          path: nuclei_results.log
+          name: nuclei-results-${{ env.SCAN_DATE }}
+          path: nuclei_results_${{ env.SCAN_DATE }}.txt

@@ -53,6 +53,7 @@ jobs:
         run: |
           nuclei -l alive_targets.txt \
             -dast \
+            -sr \
             -severity low,medium,high,critical \
             -etags dos,intrusive \
             -rl 30 \

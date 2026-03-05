@@ -2,7 +2,7 @@ name: Nuclei YWH DAST
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 5 * * *'
   workflow_dispatch:
 
 jobs:
@@ -19,18 +19,16 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '>=1.21'
-          cache: false  # suppresses "go.sum not found" cache warning
+          cache: false
 
       - name: Install ProjectDiscovery Tools
         run: |
           go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
           go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-          go install -v github.com/projectdiscovery/katana/cmd/katana@latest
 
       - name: Update Nuclei Templates
         run: nuclei -update-templates -silent
 
-      # Check if /swapfile is already in use before creating; use dd as fallback
       - name: Add Swap Space
         run: |
           if ! swapon --show | grep -q '/swapfile'; then
@@ -50,78 +48,41 @@ jobs:
           curl -s https://raw.githubusercontent.com/rix4uni/scope/main/data/Yeswehack/yeswehack_inscope.txt \
             | httpx -silent -fc 404 -o alive_targets.txt
 
-      - name: Fast Nuclei Scan
+      - name: DAST Nuclei Scan
+        timeout-minutes: 90
         run: |
           nuclei -l alive_targets.txt \
-            -as \
+            -dast \
+            -crawl \
             -severity low,medium,high,critical \
-            -etags dos \
-            -stats \
-            -o nuclei_results_${{ env.SCAN_DATE }}.txt
-
-      - name: Crawl Targets with Katana
-        timeout-minutes: 20
-        run: |
-          timeout 18m katana -list alive_targets.txt \
-            -d 2 \
-            -c 5 \
-            -p 3 \
+            -etags dos,intrusive \
             -rl 30 \
-            -timeout 10 \
-            -jsonl -o katana_crawl.jsonl 2>/dev/null || true
-
-      - name: DAST Nuclei Scan
-        timeout-minutes: 30
-        run: |
-          if [ -s katana_crawl.jsonl ]; then
-            nuclei -im jsonl -l katana_crawl.jsonl \
-              -dast \
-              -severity medium,high,critical \
-              -etags dos \
-              -rl 50 \
-              -stats \
-              -o nuclei_dast_${{ env.SCAN_DATE }}.txt
-          else
-            echo "No crawled URLs, skipping DAST scan."
-            touch nuclei_dast_${{ env.SCAN_DATE }}.txt
-          fi
+            -c 10 \
+            -stats \
+            -o nuclei_dast_${{ env.SCAN_DATE }}.txt
 
       - name: Send Telegram Notification
         if: always()
         run: |
-          FAST_FILE="nuclei_results_${{ env.SCAN_DATE }}.txt"
           DAST_FILE="nuclei_dast_${{ env.SCAN_DATE }}.txt"
 
-          FAST_COUNT=0
-          DAST_COUNT=0
-          [ -s "$FAST_FILE" ] && FAST_COUNT=$(grep -c "\[" "$FAST_FILE" 2>/dev/null || echo 0)
-          [ -s "$DAST_FILE" ] && DAST_COUNT=$(grep -c "\[" "$DAST_FILE" 2>/dev/null || echo 0)
-          TOTAL=$((FAST_COUNT + DAST_COUNT))
-
-          if [ "$TOTAL" -gt 0 ]; then
-            MESSAGE="🚨 *Nuclei YWH Scan* 🚨%0A📋 Fast Scan: $FAST_COUNT findings%0A🔍 DAST Scan: $DAST_COUNT findings%0A⚡ Total: $TOTAL vulnerabilities"
+          if [ -s "$DAST_FILE" ]; then
+            DAST_COUNT=$(grep -c "\[" "$DAST_FILE" 2>/dev/null || echo 0)
+            MESSAGE="🚨 *Nuclei YWH DAST Scan* 🚨%0A🔍 DAST Findings: $DAST_COUNT vulnerabilities"
 
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
               -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE&parse_mode=Markdown"
 
-            [ -s "$FAST_FILE" ] && curl -s \
-              -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
-              -F "document=@$FAST_FILE" \
-              "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
-
-            [ -s "$DAST_FILE" ] && curl -s \
+            curl -s \
               -F "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
               -F "document=@$DAST_FILE" \
               "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"
           fi
 
-      # ensure files exist before upload to avoid artifact warning
       - name: Upload Results Artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nuclei-results-${{ env.SCAN_DATE }}
-          path: |
-            nuclei_results_${{ env.SCAN_DATE }}.txt
-            nuclei_dast_${{ env.SCAN_DATE }}.txt
+          name: nuclei-dast-${{ env.SCAN_DATE }}
+          path: nuclei_dast_${{ env.SCAN_DATE }}.txt
           if-no-files-found: warn

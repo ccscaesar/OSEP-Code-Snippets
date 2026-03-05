@@ -29,6 +29,14 @@ jobs:
       - name: Update Nuclei Templates
         run: nuclei -update-templates -silent
 
+      # Add 4GB swap so the runner doesn't OOM-kill during crawl or scan
+      - name: Add Swap Space
+        run: |
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
       - name: Fetch & Filter Targets
         run: |
           curl -s https://raw.githubusercontent.com/rix4uni/scope/main/data/Yeswehack/yeswehack_inscope.txt \
@@ -43,19 +51,33 @@ jobs:
             -stats \
             -o nuclei_results_${{ env.SCAN_DATE }}.txt
 
+      # Removed -jc (headless Chromium = main OOM cause) and -kf all
+      # -d 2:       max crawl depth (default was 3)
+      # -c 5:       concurrent fetchers per target (default was 10)
+      # -p 3:       parallel targets at once (default was 10)
+      # -rl 30:     max 30 requests/sec (default was 150)
+      # -timeout 10: per-request timeout in seconds
+      # timeout 18m: gracefully exits 2 min before step timeout
       - name: Crawl Targets with Katana
+        timeout-minutes: 50
         run: |
-          katana -list alive_targets.txt \
-            -jc -kf all \
+          timeout 18m katana -list alive_targets.txt \
+            -d 2 \
+            -c 5 \
+            -p 3 \
+            -rl 50 \
+            -timeout 10 \
             -jsonl -o katana_crawl.jsonl 2>/dev/null || true
 
       - name: DAST Nuclei Scan
+        timeout-minutes: 90
         run: |
           if [ -s katana_crawl.jsonl ]; then
             nuclei -im jsonl -l katana_crawl.jsonl \
               -dast \
               -severity medium,high,critical \
               -etags dos \
+              -rl 50 \
               -stats \
               -o nuclei_dast_${{ env.SCAN_DATE }}.txt
           else
